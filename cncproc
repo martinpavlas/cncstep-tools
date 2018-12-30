@@ -1,0 +1,140 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+sub getTool($$);
+
+my $filename     = "infile.gcode";
+my $laser        = 0;
+my $tozero       = 0;
+
+my $rapidMove    = 0;
+my $newOperation = 0;
+my $toolShape    = "";
+my $toolDiameter = 0;
+my $tool         = "";
+
+GetOptions ("file=s"   => \$filename,
+            "laser"    => \$laser,
+            "z0"       => \$tozero)
+  or die("Error in command line arguments\n");
+ 
+
+
+open(my $fh, '<:encoding(UTF-8)', $filename)
+  or die "Could not open file '$filename' $!";
+ 
+#
+# CNC-Step header
+#
+print "( File generated with cncproc     )\n";
+print "( format for CNC-STEP controllers )\n\n";
+print "%\n";
+print "G21 (units set to milimeters)\n";
+print "G90 (use absolute coordinates)\n";
+print "G64 (use path smoothing on)\n\n";
+
+while (my $row = <$fh>) {
+
+
+  # detect tool changes
+  if ($row =~ /^\s*;\s*Operation:\s*(\w+)/) {
+      print STDERR "Operation: $1\n";
+      print "\n(Operation: $1)\n";
+      $newOperation = 1;
+      next;
+  }
+
+  # detect tool changes
+  if ($row =~ /^\s*;\s*Tool shape:\s*(\w+)/) {
+      $toolShape = $1;
+      next;
+  }
+
+  # detect tool changes
+  if ($row =~ /^\s*;\s*Tool diameter:\s*(\d+\.?\d+)/) {
+      $toolDiameter = $1;
+      next;
+  }
+
+  if ($newOperation == 1) {
+      my $newTool = getTool($toolShape, $toolDiameter);
+
+      if ($newTool ne $tool) {
+          $tool = $newTool;
+          print STDERR "Tool change: $tool ($toolShape $toolDiameter)\n";
+          print "(Tool change: $tool $toolShape $toolDiameter)\n";
+          print "M5        (stop spindle)\n";
+          print "$tool M6     (change tool)\n";
+          print "G79       (measure tool)\n";
+          print "S16000 M3 (start spindle at full speed)\n";
+      }
+      $toolShape = "";
+      $toolDiameter = 0;
+      $newOperation = 0;
+  }
+
+
+  # skip comments
+  if ($row =~ /^\s*;/) {
+      next;
+  }
+
+  # 
+  if ($laser) {
+      if ($row =~ /^\s*G0\s/) {
+          if ($rapidMove == 0) {
+            print "M09\n";
+            $rapidMove = 1;
+          }
+      }
+      elsif ($row =~ /^s*G4 P10/) {
+       $row = "\n";
+      }
+      else {
+          if ($rapidMove == 1) {
+            print "M08\n";
+            print "G4 P0.5000\n";
+            $rapidMove = 0;
+          }
+      }
+  }
+  chomp $row;
+  print "$row\n";
+}
+
+if ($tozero) { 
+  print "G0 X0.000 Y0.000 Z100.000\n";
+}
+
+# make sure spindle is stopped
+print "M5 (stop spindle)\n";
+
+
+
+sub getTool($$)
+{
+    my $shape = shift;
+    my $diameter = shift;
+
+    if ($shape eq "Cylindrical") {
+        if ($diameter == 1) {
+            return "T1";
+        } 
+        elsif ($diameter == 2) {
+            return "T2";
+        }
+        elsif ($diameter == 3) {
+            return "T3";
+        }
+        elsif ($diameter == 5) {
+            return "T4";
+        }
+        elsif ($diameter == 12) {
+            return "T5";
+        }
+    }
+    return "";
+}
